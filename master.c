@@ -135,6 +135,7 @@ int main(int argc, char *argv[]){
 	// shared memory clock
 	// [0] is seconds, [1] is nanoseconds
 	int *clock;
+	int *shmMsg;
 	
 	// create segment to hold all the info from file
 	if ((shmid = shmget(key, 50, IPC_CREAT | 0666)) < 0) {
@@ -147,6 +148,10 @@ int main(int argc, char *argv[]){
         perror("Master shmat failed.");
         exit(1);
     }
+	
+	// connect shmMsg to shared memory
+	// clock[3] and [4] will technically be shmMsg
+	shmMsg = clock;
 		
 	// write to shared memory the intial clock settings
 	clock[0] = 0;

@@ -17,12 +17,10 @@ Semaphores and Operating System Simulator
 int main(int argc, char *argv[]){
 	
 	pid_t pid = (long)getpid();			// process id
-	//printf("I'm process %ld.\n", pid);
 	
-	// generating random #
-	int r;
 	srand(time(NULL));
-	r = rand() % 5;
+	int wait, begin, end;
+
 	
 	// shared memory
 	int shmid;
@@ -41,10 +39,19 @@ int main(int argc, char *argv[]){
         exit(1);
     }
 	
-	printf("%ld: Simulated time is: %i seconds, %i nanoseconds.\n", pid, clock[0], clock[1]);
-	printf("%ld: Sleeping for %i.\n", pid, r);
-	sleep(r);
-	printf("%ld: Simulated time is: %i seconds, %i nanoseconds.\n", pid, clock[0], clock[1]);
+	// generate random wait time
+	begin = (clock[0] * 1000000000) + clock[1];
+	printf("%ld: Beginning at: %i nanoseconds.\n", pid, begin);
+	wait = (rand() % 999999) + 1;
+	printf("%ld: Waiting for: %i nanoseconds.\n", pid, wait);
+	end = begin + wait;
+	printf("%ld: Ending at: %i nanoseconds.\n", pid, end);
+	
+	while (((clock[0] * 1000000000) + clock[1]) < end){
+		// loop constantly and wait until time
+	}
+	
+	printf("%ld: FINISHED at: %i nanoseconds.\n", pid, end);
 	
 	return 0;
 }
