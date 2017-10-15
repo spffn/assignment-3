@@ -1,13 +1,15 @@
 /* Taylor Clark
 CS 4760
 Assignment #3
-Semaphores and Operating System Simulator 
+Semaphores and Operating System Shell Simulator 
 */
 
 #include <stdio.h>
-#include <time.h>
 #include <stdlib.h>
+#include <time.h>
+#include <fcntl.h>
 #include <unistd.h>
+#include <semaphore.h>
 #include <sys/types.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
@@ -15,15 +17,35 @@ Semaphores and Operating System Simulator
 #include <signal.h>
 
 char errstr[50];
+#define SEM_NAME "/test"
+#define SEM_PERMS (S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP)
+#define MUTEX 1
 
 int main(int argc, char *argv[]){
+	
+	// init the semaphore
+	sem_t *semaphore = sem_open(SEM_NAME, O_CREAT | O_EXCL, SEM_PERMS, MUTEX);
+	
+	if (semaphore == SEM_FAILED) {
+        perror("sem_open(3) error");
+        exit(EXIT_FAILURE);
+    }
+	
+	// close it because we dont use the semaphore in the parent
+	if (sem_close(semaphore) < 0) {
+        perror("sem_close(3) failed");
+        /* We ignore possible sem_unlink(3) errors here */
+        sem_unlink(SEM_NAME);
+        exit(EXIT_FAILURE);
+    }
 	
 	// the processes to create
 	int spawnNum = 5;
 	int kidLim = 0;
 	// 1,000,000,000 ns = 1 seconds
-	// increment by 1,000 by default
-	int clockInc = 1000;
+	// increment by 500 by default
+	int clockInc = 500;
+	int simTimeEnd = 2;
 	pid_t pid = (long)getpid();
 	
 	// shared memory
@@ -44,24 +66,12 @@ int main(int argc, char *argv[]){
 	opterr = 0;	
 
 	// parse the command line arguments
-	while ((c = getopt(argc, argv, ":t:hl::s::i::")) != -1) {
+	while ((c = getopt(argc, argv, ":t:hl:s:i:o:")) != -1) {
 		switch (c) {
 			// set the clock increment in nanoseconds
 			case 'i': {
 				clockInc = atoi(optarg);
 				printf ("Setting clock increment to: %i nanoseconds\n", spawnNum);
-				break;
-			}
-			// set the number of slave processes to spawn
-			case 's': {
-				spawnNum = atoi(optarg);
-				printf ("Number of chidren to spawn set to: %i\n", spawnNum);
-				break;
-			}
-			// sets the amount of time to let a program run until termination
-			case 't': {
-				timeToWait = atoi(optarg);
-				printf ("Program run time set to: %i seconds\n", timeToWait);
 				break;
 			}
 			// setting name of file of palindromes to read from	
@@ -83,13 +93,31 @@ int main(int argc, char *argv[]){
 				}
 				break;
 			}
+			// set the amount of simulated time to run for
+			case 'o': {
+				simTimeEnd = atoi(optarg);
+				printf ("Setting simulated clock end time to: %i nanoseconds\n", simTimeEnd);
+				break;
+			}
+			// set the number of slave processes to spawn
+			case 's': {
+				spawnNum = atoi(optarg);
+				printf ("Number of chidren to spawn set to: %i\n", spawnNum);
+				break;
+			}
+			// sets the amount of time to let a program run until termination
+			case 't': {
+				timeToWait = atoi(optarg);
+				printf ("Program run time set to: %i seconds\n", timeToWait);
+				break;
+			}
 			// show help
 			case 'h': {
 				printf("\n----------\n");
 				printf("HELP LIST: \n");
 				printf("-i: \n");
 				printf("\t Sets the simulation clock increment in nanoseconds.\n");
-				printf("\t Default is 60,000,000 nanoseconds.\n");
+				printf("\t Default is 1,000 nanoseconds.\n");
 				printf("\tex: -i 14000000 \n");
 				
 				printf("-h: \n");
@@ -100,8 +128,13 @@ int main(int argc, char *argv[]){
 				printf("\t Default is log.out.\n");
 				printf("\tex: -l filename \n");
 				
+				printf("-o: \n");
+				printf("\t Sets the simulated time to end at.\n");
+				printf("\t Default is 2 simulated seconds.\n");
+				printf("\tex: -o 10 \n");
+				
 				printf("-s: \n");
-				printf("\t Sets the number of processes to spawn.\n");
+				printf("\t Sets the maximum number of processes to spawn.\n");
 				printf("\t Default is 5.\n");
 				printf("\tex: -s 14 \n");
 				
@@ -150,12 +183,18 @@ int main(int argc, char *argv[]){
     }
 	
 	// connect shmMsg to shared memory
-	// clock[3] and [4] will technically be shmMsg
+	// clock[3], [4] and [5] will technically be shmMsg
+	// 3 is the child pi
+	// 4 and 5 is the time
 	shmMsg = clock;
 		
 	// write to shared memory the intial clock settings
+	// clear out shmMsg
 	clock[0] = 0;
 	clock[1] = 0;
+	shmMsg[3] = 0;
+	shmMsg[4] = 0;
+	shmMsg[5] = 0;
 
 	// start forking off processes
 	for(i = 0; i < spawnNum; i++){
@@ -178,22 +217,28 @@ int main(int argc, char *argv[]){
 	start = time(NULL);
 	endwait = start + timeToWait;
 	printf("Master: Starting clock loop at %s.\n", ctime(&start));
-    while ((start < endwait) && (clock[0] < 2))
-    {  
+    do {  
 		start = time(NULL);
 		clock[1] += clockInc;
 		if(clock[1] - 1000000000 > 0){
 			clock[1] -= 1000000000; 
 			clock[0] += 1;
 		}
+		
 		kidLim++;
-	}
+		
+	} while ((start < endwait) && (clock[0] < simTimeEnd));
 	
 	start = time(NULL);
 	printf("Master: Ending clock loop at %s", ctime(&start));
 	printf("Master: Simulated time ending at: %i seconds, %i nanoseconds.\n", clock[0], clock[1]);
 	
 	shmctl(shmid, IPC_RMID, NULL);
+	
+	if (sem_unlink(SEM_NAME) < 0){
+        perror("sem_unlink(3) failed");
+		exit(1);
+	}
 
     return 0;
 }
