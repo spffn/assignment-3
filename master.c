@@ -17,13 +17,14 @@ Semaphores and Operating System Shell Simulator
 #include <signal.h>
 
 char errstr[50];
-#define SEM_NAME "/test"
+#define SEM_NAME "/te"
 #define SEM_PERMS (S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP)
 #define MUTEX 1
 
 int main(int argc, char *argv[]){
 	
-	// init the semaphore
+	/* SEMAPHORE INFO */
+	// init semaphore
 	sem_t *semaphore = sem_open(SEM_NAME, O_CREAT | O_EXCL, SEM_PERMS, MUTEX);
 	
 	if (semaphore == SEM_FAILED) {
@@ -31,22 +32,25 @@ int main(int argc, char *argv[]){
         exit(EXIT_FAILURE);
     }
 	
-	// close it because we dont use the semaphore in the parent
+	// close it because we dont use the semaphore in the parent and we want it to
+	// autodie once all processes using it have ended
 	if (sem_close(semaphore) < 0) {
         perror("sem_close(3) failed");
-        /* We ignore possible sem_unlink(3) errors here */
         sem_unlink(SEM_NAME);
         exit(EXIT_FAILURE);
     }
+	/* SEMAPHORE INFO END */
 	
-	// the processes to create
-	int spawnNum = 5;
-	int kidLim = 0;
+	int spawnNum = 5;		// the # processes to spawn and limit on 
+							// active processes at one time
+	int activeKid = 0;		// how many kids are active now?
+	int kidLim = 0;			// how many have been made in total
+	
 	// 1,000,000,000 ns = 1 seconds
-	// increment by 500 by default
-	int clockInc = 500;
-	int simTimeEnd = 2;
-	pid_t pid = (long)getpid();
+	int clockInc = 500;					// increment simClock 500ns by default
+	int simTimeEnd = 2;					// when to end the simulation
+	pid_t pid, cpid;
+	int status;
 	
 	// shared memory
 	int shmid;
@@ -160,10 +164,8 @@ int main(int argc, char *argv[]){
 			}
 		}
 	}
-
-	// compute time to end program
 	
-	// SHARED MEMORY
+	/* SHARED MEMORY */
 	key = 1001;
 	// shared memory clock
 	// [0] is seconds, [1] is nanoseconds
@@ -183,18 +185,19 @@ int main(int argc, char *argv[]){
     }
 	
 	// connect shmMsg to shared memory
-	// clock[3], [4] and [5] will technically be shmMsg
-	// 3 is the child pi
-	// 4 and 5 is the time
+	// clock[2], [3] and [4] will technically be shmMsg
+	// 2 is the child pi
+	// 3 and 4 is the time
 	shmMsg = clock;
 		
 	// write to shared memory the intial clock settings
 	// clear out shmMsg
 	clock[0] = 0;
 	clock[1] = 0;
+	shmMsg[2] = 0;
 	shmMsg[3] = 0;
 	shmMsg[4] = 0;
-	shmMsg[5] = 0;
+	/* SHARED MEMORY STUFF END*/
 
 	// start forking off processes
 	for(i = 0; i < spawnNum; i++){
@@ -206,18 +209,32 @@ int main(int argc, char *argv[]){
 		}
 		else if (pid == 0){
 			// pass to the execlp the name of the code to exec
+			// increase the # of currently activeKids
+			activeKid++;
 			execlp("child", "child", NULL);
 			perror(errstr); 
 			printf("execl() failed!\n");
 			exit(1);
 		}
 	}
+	
+	// open file for writing to
+	FILE *f = fopen(fname, "w");
+	if(f == NULL){
+		perror(errstr);
+		printf("Error opening file.\n");
+		exit(1);
+	}
 		
-	// master waits until the real or simulated time limit runs out or 100 kids have been spawned
+	// calculate end time
 	start = time(NULL);
 	endwait = start + timeToWait;
 	printf("Master: Starting clock loop at %s.\n", ctime(&start));
+	
+	// master waits until the real or simulated time limit runs out or 100 
+	// kids have been spawned in total
     do {  
+		// increment the clock
 		start = time(NULL);
 		clock[1] += clockInc;
 		if(clock[1] - 1000000000 > 0){
@@ -225,15 +242,53 @@ int main(int argc, char *argv[]){
 			clock[0] += 1;
 		}
 		
-		kidLim++;
+		// check to see if shmMsg is empty entirely
+		// if not, write to file using the information in it and then clear it
+		// else just keep going
+		if(shmMsg[2] != 0 && shmMsg[3] != 0 && shmMsg[4] != 0){
+			printf("Master: Child %d is terminating at Master time %d.%d | Message recieved at %d.%d\n", shmMsg[2], clock[0], clock[1], shmMsg[3], shmMsg[4]);
+			fprintf(f, "Master: Child %d is terminating at Master time %d.%d | Message recieved at %d.%d\n", shmMsg[2], clock[0], clock[1], shmMsg[3], shmMsg[4]);
+			shmMsg[2] = 0;
+			shmMsg[3] = 0;
+			shmMsg[4] = 0;
+			
+			// if we do this, it means one of the kids has terminated, so we need to make another
+			activeKid--;					// remove an active kid
+			if(activeKid < spawnNum){
+				pid = fork();
+				if (pid < 0) {
+					perror(errstr); 
+					printf("Fork failed!\n");
+					exit(1);
+				}
+				else if (pid == 0){
+					// pass to the execlp the name of the code to exec
+					kidLim++;	// increase child limit
+					execlp("child", "child", NULL);
+					perror(errstr); 
+					printf("execl() failed!\n");
+					exit(1);
+				}
+			}
+		}
 		
-	} while ((start < endwait) && (clock[0] < simTimeEnd));
+	} while ((start < endwait) && (clock[0] < simTimeEnd) && kidLim < 100);
 	
 	start = time(NULL);
 	printf("Master: Ending clock loop at %s", ctime(&start));
 	printf("Master: Simulated time ending at: %i seconds, %i nanoseconds.\n", clock[0], clock[1]);
 	
+	printf("Master: Waiting on remaining kids...\n");
+	while(activeKid > 0){
+		cpid = waitpid(pid, &status, 0);
+		printf("Master: %d ended.\n", cpid);
+		activeKid--;
+	}
+	
+	/* CLEAN UP */
 	shmctl(shmid, IPC_RMID, NULL);
+	
+	fclose(f);
 	
 	if (sem_unlink(SEM_NAME) < 0){
         perror("sem_unlink(3) failed");
