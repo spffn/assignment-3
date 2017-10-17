@@ -28,6 +28,7 @@ int shmidA, shmidB;
 pid_t *pcpids;
 
 void sig_handler(int);
+void clean_up(void);
 
 int main(int argc, char *argv[]){
 	
@@ -214,11 +215,11 @@ int main(int argc, char *argv[]){
 		
 	// write to shared memory the intial clock settings
 	// clear out shmMsg
-	clock[0] = 0;
-	clock[1] = 0;
-	shmMsg[0] = 0;
-	shmMsg[1] = 0;
-	shmMsg[2] = 0;
+	clock[0] = 0;			// seconds
+	clock[1] = 0;			// nanoseconds
+	shmMsg[0] = 0;			// child pid
+	shmMsg[1] = 0;			// seconds
+	shmMsg[2] = 0;			// nanoseconds
 	/* SHARED MEMORY END*/
 
 	
@@ -253,11 +254,12 @@ int main(int argc, char *argv[]){
 	// calculate end time
 	start = time(NULL);
 	endwait = start + timeToWait;
-	fprintf(f, "Master: Starting clock loop at %s.\n", ctime(&start));
+	fprintf(f, "Master: Starting clock loop at %s", ctime(&start));
+	fprintf(f, "\n-------------------------\n\n");
 	
 	// master waits until the real or simulated time limit runs out or 
 	// 100 kids have been spawned in total
-    while (1) {  
+    while (clock[0] < simTimeEnd && start < endwait && kidLim < 100) {  
 		int who;
 		
 		// increment the clock
@@ -280,7 +282,7 @@ int main(int argc, char *argv[]){
 				}
 			}
 			printf("Master: Child %d is terminating at Master time %d.%d | Message recieved at %d.%d\n", shmMsg[0], clock[0], clock[1], shmMsg[1], shmMsg[2]);
-			fprintf(f, "Master: Child %d is terminating at Master time %d.%d | Message recieved at %d.%d\n", shmMsg[2], clock[0], clock[1], shmMsg[1], shmMsg[2]);
+			fprintf(f, "Master: Child %d is terminating at Master time %d.%d | Message recieved at %d.%d\n", shmMsg[0], clock[0], clock[1], shmMsg[1], shmMsg[2]);
 			
 			shmMsg[0] = 0;
 			shmMsg[1] = 0;
@@ -303,22 +305,27 @@ int main(int argc, char *argv[]){
 				printf("execl() failed!\n");
 				exit(1);
 			}
-			activeKid++;	// increase active kids
-			 
-			kidLim++;		// increase child limit
 			
 			printf("Master: New child %ld spawned.\n", (*cpids)[who]);
-			printf("Master: %i total kids spawned.\n", kidLim);
+			activeKid++;	// increase active kids
+			kidLim++;		// increase child limit
 		}
-		sleep(3);
 		
 	}
 	
+	fprintf(f, "\n-------------------------\n\n");
 	start = time(NULL);
 	fprintf(f, "Master: Ending clock loop at %s", ctime(&start));
 	fprintf(f, "Master: Simulated time ending at: %i seconds, %i nanoseconds.\n", clock[0], clock[1]);
 	
 	fprintf(f, "Total kids spawned: %i\n", kidLim);
+	
+	if(clock[0] < simTimeEnd || start < endwait){
+		printf("Master: Out of time!\n");
+	}
+	else if(kidLim < 100){
+		printf("Master: Hit child spawn limit!\n");
+	}
 	
 	// if we have kids still alive after the loop ends, find them
 	// and terminate them
