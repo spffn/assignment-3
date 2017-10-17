@@ -15,11 +15,9 @@ Semaphores and Operating System Shell Simulator
 #include <sys/shm.h>
 #include <sys/stat.h>
 #include <signal.h>
+#include "semnam.h"
 
 char errstr[50];
-#define SEM_NAME "/te"
-#define SEM_PERMS (S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP)
-#define MUTEX 1
 
 int main(int argc, char *argv[]){
 	
@@ -41,13 +39,13 @@ int main(int argc, char *argv[]){
     }
 	/* SEMAPHORE INFO END */
 	
-	int spawnNum = 5;		// the # processes to spawn and limit on 
-							// active processes at one time
-	int activeKid = 0;		// how many kids are active now?
-	int kidLim = 0;			// how many have been made in total
+	int spawnNum = 5;				// the # processes to spawn and limit on 
+									// active processes at one time
+	int activeKid = spawnNum;		// how many kids are active now?
+	int kidLim = spawnNum;			// how many have been made in total
 	
 	// 1,000,000,000 ns = 1 seconds
-	int clockInc = 500;					// increment simClock 500ns by default
+	int clockInc = 50;					// increment simClock 500ns by default
 	int simTimeEnd = 2;					// when to end the simulation
 	pid_t pid, cpid;
 	int status;
@@ -106,6 +104,8 @@ int main(int argc, char *argv[]){
 			// set the number of slave processes to spawn
 			case 's': {
 				spawnNum = atoi(optarg);
+				activeKid = spawnNum;
+				kidLim = spawnNum;
 				printf ("Number of chidren to spawn set to: %i\n", spawnNum);
 				break;
 			}
@@ -210,7 +210,6 @@ int main(int argc, char *argv[]){
 		else if (pid == 0){
 			// pass to the execlp the name of the code to exec
 			// increase the # of currently activeKids
-			activeKid++;
 			execlp("child", "child", NULL);
 			perror(errstr); 
 			printf("execl() failed!\n");
@@ -233,7 +232,7 @@ int main(int argc, char *argv[]){
 	
 	// master waits until the real or simulated time limit runs out or 100 
 	// kids have been spawned in total
-    do {  
+    while (activeKid > 0) {  
 		// increment the clock
 		start = time(NULL);
 		clock[1] += clockInc;
@@ -245,41 +244,50 @@ int main(int argc, char *argv[]){
 		// check to see if shmMsg is empty entirely
 		// if not, write to file using the information in it and then clear it
 		// else just keep going
-		if(shmMsg[2] != 0 && shmMsg[3] != 0 && shmMsg[4] != 0){
+		if(shmMsg[2] != 0 || shmMsg[3] != 0 || shmMsg[4] != 0){
 			printf("Master: Child %d is terminating at Master time %d.%d | Message recieved at %d.%d\n", shmMsg[2], clock[0], clock[1], shmMsg[3], shmMsg[4]);
 			fprintf(f, "Master: Child %d is terminating at Master time %d.%d | Message recieved at %d.%d\n", shmMsg[2], clock[0], clock[1], shmMsg[3], shmMsg[4]);
 			shmMsg[2] = 0;
 			shmMsg[3] = 0;
 			shmMsg[4] = 0;
-			
-			// if we do this, it means one of the kids has terminated, so we need to make another
 			activeKid--;					// remove an active kid
-			if(activeKid < spawnNum){
+			printf("Master: %i active kids.\n", activeKid);
+			
+			/*// if we do this, it means one of the kids has terminated, so we need to make another
+			
+			if((activeKid < (spawnNum - 1)) && (activeKid >= 0)){
 				pid = fork();
 				if (pid < 0) {
 					perror(errstr); 
 					printf("Fork failed!\n");
-					exit(1);
+					kidLim = 100;
 				}
 				else if (pid == 0){
 					// pass to the execlp the name of the code to exec
-					kidLim++;	// increase child limit
 					execlp("child", "child", NULL);
 					perror(errstr); 
 					printf("execl() failed!\n");
 					exit(1);
 				}
 			}
+			activeKid++;	// increase active kids
+			kidLim++;		// increase child limit
+			
+			printf("Master: %i total kids spawned.\n", kidLim);*/
 		}
 		
-	} while ((start < endwait) && (clock[0] < simTimeEnd) && kidLim < 100);
+	}
 	
 	start = time(NULL);
 	printf("Master: Ending clock loop at %s", ctime(&start));
 	printf("Master: Simulated time ending at: %i seconds, %i nanoseconds.\n", clock[0], clock[1]);
 	
-	printf("Master: Waiting on remaining kids...\n");
+
 	while(activeKid > 0){
+		printf("Master: Waiting on %i remaining kid(s)...\n", activeKid);
+		shmMsg[2] = 0;
+		shmMsg[3] = 0;
+		shmMsg[4] = 0;
 		cpid = waitpid(pid, &status, 0);
 		printf("Master: %d ended.\n", cpid);
 		activeKid--;
@@ -294,6 +302,8 @@ int main(int argc, char *argv[]){
         perror("sem_unlink(3) failed");
 		exit(1);
 	}
+	
+	sem_close(semaphore);
 
     return 0;
 }

@@ -14,8 +14,7 @@ Semaphores and Operating System Shell Simulator
 #include <sys/types.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
-
-#define SEM_NAME "/te"
+#include "semnam.h"
 
 int main(int argc, char *argv[]){
 	
@@ -31,6 +30,7 @@ int main(int argc, char *argv[]){
 	int wait, begin, end;
 	int stop, try;
 	stop = 1;		// when to end loop
+	int s;
 
 	// shared memory
 	int shmid;
@@ -58,37 +58,31 @@ int main(int argc, char *argv[]){
 	wait = (rand() % 999999) + 1;
 	end = begin + wait;
 	
-	do {
+	while(stop == 1) {
 		// wait on the semaphore
-		if (sem_wait(semaphore) < 0) {
-				perror("sem_wait(3) failed on child");
-				exit(1);
-			}
-			
-			
+		if(sem_trywait(semaphore) != 0){
+			continue;
+		}
+		
 		/* CRITICAL SECTION */
 		// if its end time has arrived check if shmMsg is empty entirely
 		if(((clock[0] * 1000000000) + clock[1]) <= end){
 			// if it isnt, break and try again next time
-			if(shmMsg[2] != 0 && shmMsg[3] != 0 && shmMsg[4] != 0){
-				//printf("%ld: shmMsg is full!\n", pid);
+			if(shmMsg[2] != 0 || shmMsg[3] != 0 || shmMsg[4] != 0){
+				// shmMsg is full, can't do anything
 			}
 			else {
-				printf("%ld: Time to end!\n", pid);
 				stop = 0;
 				shmMsg[2] = pid;
 				shmMsg[3] = clock[0];
 				shmMsg[4] = clock[1];
 			}
+			
 		}
 		
 		// let go of the semaphore
-		if (sem_post(semaphore) < 0) {
-            perror("sem_post(3) error on child");
-			exit(1);
-        }
-		
-	} while(stop == 1);
+		sem_post(semaphore);
+	}
 	
 	printf("%ld: FINISHED at: %i.%i.\n", pid, clock[0], clock[1]);
 	
