@@ -3,10 +3,9 @@ CS 4760
 Assignment #3
 Semaphores and Operating System Shell Simulator 
 
-This program will take command line arguments to spawn that many processes to start, and
-keep only that many alive at once. Oss makes a simulated clock which increments every loop.
-The processes forked off by main then loop over a critical section, checking to see if they are supposed to terminate yet. If they are, they leave a message in shared memory which oss
-writes to a file.
+In this project I created an empty shell of an OS simulator and do some very basic tasks in preparation for a more comprehensive simulation later. It uses fork, exec, shared memory and semaphores.
+
+This project (as far as I can tell) meets all the requirements of the project specifications. However, it should be noted that the forking off of children by oss in the loop, often fails around ~20+ children. I am not entirely sure why this is. 
 */
 
 #include <ctype.h>

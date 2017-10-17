@@ -3,10 +3,9 @@ CS 4760
 Assignment #3
 Semaphores and Operating System Shell Simulator 
 
-This program will take command line arguments to spawn that many processes to start, and
-keep only that many alive at once. Oss makes a simulated clock which increments every loop.
-The processes forked off by main then loop over a critical section, checking to see if they are supposed to terminate yet. If they are, they leave a message in shared memory which oss
-writes to a file.
+In this project I created an empty shell of an OS simulator and do some very basic tasks in preparation for a more comprehensive simulation later. It uses fork, exec, shared memory and semaphores.
+
+This project (as far as I can tell) meets all the requirements of the project specifications. However, it should be noted that the forking off of children by oss in the loop, often fails around ~20+ children. I am not entirely sure why this is. 
 */
 
 #include <stdio.h>
@@ -23,12 +22,20 @@ writes to a file.
 #include "semnam.h"
 
 char errstr[50];
+sem_t *semaphore;
+FILE *f;
+int shmidA, shmidB;
+pid_t *pcpids;
+
+void sig_handler(int);
 
 int main(int argc, char *argv[]){
 	
+	signal(SIGINT, sig_handler);
+	
 	/* SEMAPHORE INFO */
 	// init semaphore
-	sem_t *semaphore = sem_open(SEM_NAME, O_CREAT | O_EXCL, SEM_PERMS, MUTEX);
+	semaphore = sem_open(SEM_NAME, O_CREAT | O_EXCL, SEM_PERMS, MUTEX);
 	
 	if (semaphore == SEM_FAILED) {
 		printf("Master: ");
@@ -53,8 +60,8 @@ int main(int argc, char *argv[]){
 	int kidLim = spawnNum;			// how many have been made in total
 	
 	// 1,000,000,000 ns = 1 seconds
-	int clockInc = 50;					// increment simClock 500ns by default
-	int simTimeEnd = 2;					// when to end the simulation
+	int clockInc = 50;				// increment simClock 50 ns by default
+	int simTimeEnd = 2;				// when to end the simulation
 	pid_t pid;
 	int status;
 	
@@ -64,7 +71,7 @@ int main(int argc, char *argv[]){
 	// the timer information
     time_t endwait;
     time_t start;
-    int timeToWait = 20; 		// end loop after this time has elapsed
+    int timeToWait = 20; 			// end loop after this time has elapsed
 	
 	// for printing errors
 	snprintf(errstr, sizeof errstr, "%s: Error: ", argv[0]);
@@ -177,7 +184,6 @@ int main(int argc, char *argv[]){
 	
 	
 	/* SHARED MEMORY */
-	int shmidA, shmidB;
 	key_t keyA, keyB;
 	keyA = 1001;
 	keyB = 888;
@@ -218,15 +224,16 @@ int main(int argc, char *argv[]){
 	
 	// open file for writing to
 	// will rewrite the file everytime
-	FILE *f = fopen(fname, "w");
+	f = fopen(fname, "w");
 	if(f == NULL){
 		perror(errstr);
 		printf("Error opening file.\n");
 		exit(1);
 	}
 	
-	// start forking off processes
 	pid_t (*cpids)[spawnNum] = malloc(sizeof *cpids);
+	pcpids = cpids;
+	// start forking off processes
 	for(i = 0; i < spawnNum; i++){
 		(*cpids)[i] = fork();
 		if ((*cpids)[i] < 0) {
@@ -250,7 +257,7 @@ int main(int argc, char *argv[]){
 	
 	// master waits until the real or simulated time limit runs out or 
 	// 100 kids have been spawned in total
-    while (clock[0] < simTimeEnd && start < endwait && kidLim < 100) {  
+    while (1) {  
 		int who;
 		
 		// increment the clock
@@ -274,12 +281,13 @@ int main(int argc, char *argv[]){
 			}
 			printf("Master: Child %d is terminating at Master time %d.%d | Message recieved at %d.%d\n", shmMsg[0], clock[0], clock[1], shmMsg[1], shmMsg[2]);
 			fprintf(f, "Master: Child %d is terminating at Master time %d.%d | Message recieved at %d.%d\n", shmMsg[2], clock[0], clock[1], shmMsg[1], shmMsg[2]);
+			
 			shmMsg[0] = 0;
 			shmMsg[1] = 0;
 			shmMsg[2] = 0;
 			activeKid--;					// remove an active kid
 			printf("Master: %i active kids.\n", activeKid);
-			 
+			
 			// we need to make another and overwrite the previous entry in the
 			// process list with this new one
 			(*cpids)[who] = fork();
@@ -295,13 +303,14 @@ int main(int argc, char *argv[]){
 				printf("execl() failed!\n");
 				exit(1);
 			}
-			
 			activeKid++;	// increase active kids
+			 
 			kidLim++;		// increase child limit
 			
 			printf("Master: New child %ld spawned.\n", (*cpids)[who]);
 			printf("Master: %i total kids spawned.\n", kidLim);
 		}
+		sleep(3);
 		
 	}
 	
@@ -323,16 +332,34 @@ int main(int argc, char *argv[]){
 		}
 	}
 	
-	/* CLEAN UP */
+	/* CLEAN UP */ 
+	clean_up();
+
+    return 0;
+}
+
+/* CLEAN UP */ 
+// release all shared memory, malloc'd memory, semaphores and close files.
+void clean_up(){
+	int i;
+	printf("Master: Cleaning up now.\n");
 	shmctl(shmidA, IPC_RMID, NULL);
 	shmctl(shmidB, IPC_RMID, NULL);
 	fclose(f);
 	if (sem_unlink(SEM_NAME) < 0){
-        perror("sem_unlink(3) failed");
-		exit(1);
+		perror("sem_unlink(3) failed");
 	}
-	free(cpids);
+	free(pcpids);
 	sem_close(semaphore);
+}
 
-    return 0;
+/* SIGNAL HANDLER */
+// catches SIGINT (Ctrl+C) and notifies user that it did.
+// it then cleans up and ends the program.
+void sig_handler(int signo){
+	if (signo == SIGINT){
+		printf("Master: Caught Ctrl-C.\n");
+		clean_up();
+		exit(0);
+	}
 }
