@@ -18,13 +18,14 @@ Semaphores and Operating System Shell Simulator
 
 int main(int argc, char *argv[]){
 	
+	pid_t pid = (long)getpid();			// process id
+	
 	sem_t *semaphore = sem_open(SEM_NAME, O_RDWR);
 	if (semaphore == SEM_FAILED) {
+		printf("%ld: ", pid);
         perror("sem_open(3) failed");
         exit(EXIT_FAILURE);
     }
-	
-	pid_t pid = (long)getpid();			// process id
 	
 	srand(time(NULL));
 	int wait, begin, end;
@@ -54,7 +55,6 @@ int main(int argc, char *argv[]){
 	
 	// generate random wait time
 	begin = (clock[0] * 1000000000) + clock[1];
-	printf("%ld: Beginning at: %i nanoseconds.\n", pid, begin);
 	wait = (rand() % 999999) + 1;
 	end = begin + wait;
 	
@@ -83,8 +83,6 @@ int main(int argc, char *argv[]){
 		// let go of the semaphore
 		sem_post(semaphore);
 	}
-	
-	printf("%ld: FINISHED at: %i.%i.\n", pid, clock[0], clock[1]);
 	
 	return 0;
 }

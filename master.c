@@ -26,6 +26,7 @@ int main(int argc, char *argv[]){
 	sem_t *semaphore = sem_open(SEM_NAME, O_CREAT | O_EXCL, SEM_PERMS, MUTEX);
 	
 	if (semaphore == SEM_FAILED) {
+		printf("Master: ");
         perror("sem_open(3) error");
         exit(EXIT_FAILURE);
     }
@@ -47,7 +48,7 @@ int main(int argc, char *argv[]){
 	// 1,000,000,000 ns = 1 seconds
 	int clockInc = 50;					// increment simClock 500ns by default
 	int simTimeEnd = 2;					// when to end the simulation
-	pid_t pid, cpid;
+	pid_t pid;
 	int status;
 	
 	// shared memory
@@ -200,14 +201,15 @@ int main(int argc, char *argv[]){
 	/* SHARED MEMORY STUFF END*/
 
 	// start forking off processes
+	pid_t (*cpids)[spawnNum] = malloc(sizeof *cpids);
 	for(i = 0; i < spawnNum; i++){
-		pid = fork();
-		if (pid < 0) {
+		(*cpids)[i] = fork();
+		if ((*cpids)[i] < 0) {
 			perror(errstr); 
 			printf("Fork failed!\n");
 			exit(1);
 		}
-		else if (pid == 0){
+		else if ((*cpids)[i] == 0){
 			// pass to the execlp the name of the code to exec
 			// increase the # of currently activeKids
 			execlp("child", "child", NULL);
@@ -232,7 +234,9 @@ int main(int argc, char *argv[]){
 	
 	// master waits until the real or simulated time limit runs out or 100 
 	// kids have been spawned in total
-    while (activeKid > 0) {  
+    while (clock[0] < simTimeEnd && start < endwait && kidLim < 100) {  
+		int who;
+		
 		// increment the clock
 		start = time(NULL);
 		clock[1] += clockInc;
@@ -245,6 +249,11 @@ int main(int argc, char *argv[]){
 		// if not, write to file using the information in it and then clear it
 		// else just keep going
 		if(shmMsg[2] != 0 || shmMsg[3] != 0 || shmMsg[4] != 0){
+			for(i = 0; i < spawnNum; i++){
+				if((*cpids)[i] == shmMsg[2]){
+					who = i;
+				}
+			}
 			printf("Master: Child %d is terminating at Master time %d.%d | Message recieved at %d.%d\n", shmMsg[2], clock[0], clock[1], shmMsg[3], shmMsg[4]);
 			fprintf(f, "Master: Child %d is terminating at Master time %d.%d | Message recieved at %d.%d\n", shmMsg[2], clock[0], clock[1], shmMsg[3], shmMsg[4]);
 			shmMsg[2] = 0;
@@ -253,27 +262,28 @@ int main(int argc, char *argv[]){
 			activeKid--;					// remove an active kid
 			printf("Master: %i active kids.\n", activeKid);
 			
-			/*// if we do this, it means one of the kids has terminated, so we need to make another
-			
-			if((activeKid < (spawnNum - 1)) && (activeKid >= 0)){
-				pid = fork();
-				if (pid < 0) {
-					perror(errstr); 
-					printf("Fork failed!\n");
-					kidLim = 100;
-				}
-				else if (pid == 0){
-					// pass to the execlp the name of the code to exec
-					execlp("child", "child", NULL);
-					perror(errstr); 
-					printf("execl() failed!\n");
-					exit(1);
-				}
+			// if we do this, it means one of the kids has terminated, so we 
+			// need to make another and overwrite the previous entry in the
+			// process list with this new one
+			(*cpids)[who] = fork();
+			if ((*cpids)[who] < 0) {
+				perror(errstr); 
+				printf("Fork failed!\n");
+				continue;
 			}
+			else if ((*cpids)[who] == 0){
+			// pass to the execlp the name of the code to exec
+				execlp("child", "child", NULL);
+				perror(errstr); 
+				printf("execl() failed!\n");
+				exit(1);
+			}
+			
 			activeKid++;	// increase active kids
 			kidLim++;		// increase child limit
 			
-			printf("Master: %i total kids spawned.\n", kidLim);*/
+			printf("Master: New child %ld spawned.\n", (*cpids)[who]);
+			printf("Master: %i total kids spawned.\n", kidLim);
 		}
 		
 	}
@@ -282,15 +292,14 @@ int main(int argc, char *argv[]){
 	printf("Master: Ending clock loop at %s", ctime(&start));
 	printf("Master: Simulated time ending at: %i seconds, %i nanoseconds.\n", clock[0], clock[1]);
 	
-
-	while(activeKid > 0){
-		printf("Master: Waiting on %i remaining kid(s)...\n", activeKid);
-		shmMsg[2] = 0;
-		shmMsg[3] = 0;
-		shmMsg[4] = 0;
-		cpid = waitpid(pid, &status, 0);
-		printf("Master: %d ended.\n", cpid);
-		activeKid--;
+	if(activeKid > 0){
+		printf("Master: %ld kids remaining.\n", activeKid);
+		for(i = 0; i < spawnNum; i++){
+			if(kill((*cpids)[i], 0)){
+				printf("Master: Killing %ld.\n", (*cpids)[i]);
+				kill((*cpids)[i], SIGTERM);
+			}
+		}
 	}
 	
 	/* CLEAN UP */
@@ -302,6 +311,8 @@ int main(int argc, char *argv[]){
         perror("sem_unlink(3) failed");
 		exit(1);
 	}
+	
+	free(cpids);
 	
 	sem_close(semaphore);
 
