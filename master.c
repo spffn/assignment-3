@@ -2,6 +2,11 @@
 CS 4760
 Assignment #3
 Semaphores and Operating System Shell Simulator 
+
+This program will take command line arguments to spawn that many processes to start, and
+keep only that many alive at once. Oss makes a simulated clock which increments every loop.
+The processes forked off by main then loop over a critical section, checking to see if they are supposed to terminate yet. If they are, they leave a message in shared memory which oss
+writes to a file.
 */
 
 #include <stdio.h>
@@ -40,6 +45,8 @@ int main(int argc, char *argv[]){
     }
 	/* SEMAPHORE INFO END */
 	
+	
+	/* VARIOUS VARIABLES */
 	int spawnNum = 5;				// the # processes to spawn and limit on 
 									// active processes at one time
 	int activeKid = spawnNum;		// how many kids are active now?
@@ -50,10 +57,6 @@ int main(int argc, char *argv[]){
 	int simTimeEnd = 2;					// when to end the simulation
 	pid_t pid;
 	int status;
-	
-	// shared memory
-	int shmid;
-	key_t key;
 	
 	// file name
 	char fname[] = "log.out";
@@ -68,7 +71,7 @@ int main(int argc, char *argv[]){
 	int i, c;
 	opterr = 0;	
 
-	// parse the command line arguments
+	/* COMMAND LINE PARSING */
 	while ((c = getopt(argc, argv, ":t:hl:s:i:o:")) != -1) {
 		switch (c) {
 			// set the clock increment in nanoseconds
@@ -103,8 +106,13 @@ int main(int argc, char *argv[]){
 				break;
 			}
 			// set the number of slave processes to spawn
+			// max is 19
 			case 's': {
 				spawnNum = atoi(optarg);
+				if(spawnNum > 19){
+					printf("Can only set a max of 19 processes to run at one time.\n");
+					spawnNum = 19;
+				}
 				activeKid = spawnNum;
 				kidLim = spawnNum;
 				printf ("Number of chidren to spawn set to: %i\n", spawnNum);
@@ -165,41 +173,58 @@ int main(int argc, char *argv[]){
 			}
 		}
 	}
+	/* COMMAND LINE PARSING END */
+	
 	
 	/* SHARED MEMORY */
-	key = 1001;
+	int shmidA, shmidB;
+	key_t keyA, keyB;
+	keyA = 1001;
+	keyB = 888;
 	// shared memory clock
 	// [0] is seconds, [1] is nanoseconds
 	int *clock;
 	int *shmMsg;
 	
 	// create segment to hold all the info from file
-	if ((shmid = shmget(key, 50, IPC_CREAT | 0666)) < 0) {
+	if ((shmidA = shmget(keyA, 50, IPC_CREAT | 0666)) < 0) {
+        perror("Master shmget failed.");
+        exit(1);
+    }
+	else if ((shmidB = shmget(keyB, 50, IPC_CREAT | 0666)) < 0) {
         perror("Master shmget failed.");
         exit(1);
     }
 	
 	// attach segment to data space
-	if ((clock = shmat(shmid, NULL, 0)) == (char *) -1) {
+	if ((clock = shmat(shmidA, NULL, 0)) == (char *) -1) {
         perror("Master shmat failed.");
         exit(1);
     }
-	
-	// connect shmMsg to shared memory
-	// clock[2], [3] and [4] will technically be shmMsg
-	// 2 is the child pi
-	// 3 and 4 is the time
-	shmMsg = clock;
+	else if ((shmMsg = shmat(shmidB, NULL, 0)) == (char *) -1) {
+        perror("Master shmat failed.");
+        exit(1);
+    }
 		
 	// write to shared memory the intial clock settings
 	// clear out shmMsg
 	clock[0] = 0;
 	clock[1] = 0;
+	shmMsg[0] = 0;
+	shmMsg[1] = 0;
 	shmMsg[2] = 0;
-	shmMsg[3] = 0;
-	shmMsg[4] = 0;
-	/* SHARED MEMORY STUFF END*/
+	/* SHARED MEMORY END*/
 
+	
+	// open file for writing to
+	// will rewrite the file everytime
+	FILE *f = fopen(fname, "w");
+	if(f == NULL){
+		perror(errstr);
+		printf("Error opening file.\n");
+		exit(1);
+	}
+	
 	// start forking off processes
 	pid_t (*cpids)[spawnNum] = malloc(sizeof *cpids);
 	for(i = 0; i < spawnNum; i++){
@@ -211,29 +236,20 @@ int main(int argc, char *argv[]){
 		}
 		else if ((*cpids)[i] == 0){
 			// pass to the execlp the name of the code to exec
-			// increase the # of currently activeKids
 			execlp("child", "child", NULL);
 			perror(errstr); 
 			printf("execl() failed!\n");
 			exit(1);
 		}
 	}
-	
-	// open file for writing to
-	FILE *f = fopen(fname, "w");
-	if(f == NULL){
-		perror(errstr);
-		printf("Error opening file.\n");
-		exit(1);
-	}
 		
 	// calculate end time
 	start = time(NULL);
 	endwait = start + timeToWait;
-	printf("Master: Starting clock loop at %s.\n", ctime(&start));
+	fprintf(f, "Master: Starting clock loop at %s.\n", ctime(&start));
 	
-	// master waits until the real or simulated time limit runs out or 100 
-	// kids have been spawned in total
+	// master waits until the real or simulated time limit runs out or 
+	// 100 kids have been spawned in total
     while (clock[0] < simTimeEnd && start < endwait && kidLim < 100) {  
 		int who;
 		
@@ -246,24 +262,25 @@ int main(int argc, char *argv[]){
 		}
 		
 		// check to see if shmMsg is empty entirely
-		// if not, write to file using the information in it and then clear it
-		// else just keep going
-		if(shmMsg[2] != 0 || shmMsg[3] != 0 || shmMsg[4] != 0){
+		// if it is, start loop again
+		// else, write to file using the information in it and then clear it
+		if(shmMsg[0] != 0 || shmMsg[1] != 0 || shmMsg[2] != 0){
+			// check who sent this message so we can overwrite it as it's
+			// already dead when we get here
 			for(i = 0; i < spawnNum; i++){
-				if((*cpids)[i] == shmMsg[2]){
+				if((*cpids)[i] == shmMsg[0]){
 					who = i;
 				}
 			}
-			printf("Master: Child %d is terminating at Master time %d.%d | Message recieved at %d.%d\n", shmMsg[2], clock[0], clock[1], shmMsg[3], shmMsg[4]);
-			fprintf(f, "Master: Child %d is terminating at Master time %d.%d | Message recieved at %d.%d\n", shmMsg[2], clock[0], clock[1], shmMsg[3], shmMsg[4]);
+			printf("Master: Child %d is terminating at Master time %d.%d | Message recieved at %d.%d\n", shmMsg[0], clock[0], clock[1], shmMsg[1], shmMsg[2]);
+			fprintf(f, "Master: Child %d is terminating at Master time %d.%d | Message recieved at %d.%d\n", shmMsg[2], clock[0], clock[1], shmMsg[1], shmMsg[2]);
+			shmMsg[0] = 0;
+			shmMsg[1] = 0;
 			shmMsg[2] = 0;
-			shmMsg[3] = 0;
-			shmMsg[4] = 0;
 			activeKid--;					// remove an active kid
 			printf("Master: %i active kids.\n", activeKid);
-			
-			// if we do this, it means one of the kids has terminated, so we 
-			// need to make another and overwrite the previous entry in the
+			 
+			// we need to make another and overwrite the previous entry in the
 			// process list with this new one
 			(*cpids)[who] = fork();
 			if ((*cpids)[who] < 0) {
@@ -289,9 +306,13 @@ int main(int argc, char *argv[]){
 	}
 	
 	start = time(NULL);
-	printf("Master: Ending clock loop at %s", ctime(&start));
-	printf("Master: Simulated time ending at: %i seconds, %i nanoseconds.\n", clock[0], clock[1]);
+	fprintf(f, "Master: Ending clock loop at %s", ctime(&start));
+	fprintf(f, "Master: Simulated time ending at: %i seconds, %i nanoseconds.\n", clock[0], clock[1]);
 	
+	fprintf(f, "Total kids spawned: %i\n", kidLim);
+	
+	// if we have kids still alive after the loop ends, find them
+	// and terminate them
 	if(activeKid > 0){
 		printf("Master: %ld kids remaining.\n", activeKid);
 		for(i = 0; i < spawnNum; i++){
@@ -303,17 +324,14 @@ int main(int argc, char *argv[]){
 	}
 	
 	/* CLEAN UP */
-	shmctl(shmid, IPC_RMID, NULL);
-	
+	shmctl(shmidA, IPC_RMID, NULL);
+	shmctl(shmidB, IPC_RMID, NULL);
 	fclose(f);
-	
 	if (sem_unlink(SEM_NAME) < 0){
         perror("sem_unlink(3) failed");
 		exit(1);
 	}
-	
 	free(cpids);
-	
 	sem_close(semaphore);
 
     return 0;
